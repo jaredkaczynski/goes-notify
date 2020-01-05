@@ -12,6 +12,8 @@ import os
 import glob
 import requests
 import hashlib
+import time
+import configparser
 
 from datetime import datetime
 from os import path
@@ -21,6 +23,8 @@ from email.mime.text import MIMEText
 from email.mime.image import MIMEImage
 from email.mime.multipart import MIMEMultipart
 
+import discord_helper
+
 EMAIL_TEMPLATE = """
 <p>Good news! New Global Entry appointment(s) available on the following dates:</p>
 %s
@@ -28,6 +32,14 @@ EMAIL_TEMPLATE = """
 <p>If this sounds good, please sign in to https://ttp.cbp.dhs.gov/ to reschedule.</p>
 """
 GOES_URL_FORMAT = 'https://ttp.cbp.dhs.gov/schedulerapi/slots?orderBy=soonest&limit=3&locationId={0}&minimum=1'
+
+config = configparser.ConfigParser()
+
+
+def get_config():
+    global config
+    config.read('config.ini')
+
 
 def notify_send_email(dates, current_apt, settings, use_gmail=False):
     sender = settings.get('email_from')
@@ -50,7 +62,7 @@ def notify_send_email(dates, current_apt, settings, use_gmail=False):
             server.starttls()
             server.ehlo()
             if username:
-                    server.login(username, password)
+                server.login(username, password)
 
         subject = "Alert: Global Entry interview openings are available"
 
@@ -76,11 +88,13 @@ def notify_send_email(dates, current_apt, settings, use_gmail=False):
         logging.exception('Failed to send succcess e-mail.')
         log(e)
 
+
 def notify_osx(msg):
     commands.getstatusoutput("osascript -e 'display notification \"%s\" with title \"Global Entry Notifier\"'" % msg)
 
+
 def notify_sms(settings, dates):
-    for avail_apt in dates: 
+    for avail_apt in dates:
         try:
             from twilio.rest import Client
         except ImportError:
@@ -104,51 +118,61 @@ def notify_sms(settings, dates):
         logging.info('Sending SMS.')
         client.messages.create(body=body, to=to_number, from_=from_number)
 
+
 def main(settings):
+    get_config()
     try:
-        # obtain the json from the web url
-        data = requests.get(GOES_URL_FORMAT.format(settings['enrollment_location_id'])).json()
+        current_apt = datetime.strptime(config['DEFAULT']['current_apt'], "%Y-%m-%dT%H:%M:%S")
+    except:
+        current_apt = datetime.strptime('December 10, 2030', '%B %d, %Y')
+    #try:
+    # obtain the json from the web url
+    print(GOES_URL_FORMAT.format(settings['enrollment_location_id']))
+    data = requests.get(GOES_URL_FORMAT.format(settings['enrollment_location_id'])).json()
 
-    	# parse the json
-        if not data:
-            logging.info('No tests available.')
-            return
-
-        current_apt = datetime.strptime(settings['current_interview_date_str'], '%B %d, %Y')
-        dates = []
-        for o in data:
-            if o['active']:
-                dt = o['startTimestamp'] #2017-12-22T15:15
-                dtp = datetime.strptime(dt, '%Y-%m-%dT%H:%M')
-                if current_apt > dtp:
-                    dates.append(dtp.strftime('%A, %B %d @ %I:%M%p'))
-
-        if not dates:
-            return
-
-        hash = hashlib.md5(''.join(dates) + current_apt.strftime('%B %d, %Y @ %I:%M%p')).hexdigest()
-        fn = "goes-notify_{0}.txt".format(hash)
-        if settings.get('no_spamming') and os.path.exists(fn):
-            return
-        else:
-            for f in glob.glob("goes-notify_*.txt"):
-                os.remove(f)
-            f = open(fn,"w")
-            f.close()
-
-    except OSError:
-        logging.critical("Something went wrong when trying to obtain the openings")
+    # parse the json
+    if not data:
+        logging.info('No tests available.')
         return
 
-    msg = 'Found new appointment(s) in location %s on %s (current is on %s)!' % (settings.get("enrollment_location_id"), dates[0], current_apt.strftime('%B %d, %Y @ %I:%M%p'))
+    # current_apt = datetime.strptime(settings['current_interview_date_str'], '%B %d, %Y')
+
+    dates = []
+    dates_original = []
+    for o in data:
+        if o['active']:
+            dt = o['startTimestamp']  # 2017-12-22T15:15
+            dtp = datetime.strptime(dt, '%Y-%m-%dT%H:%M')
+            if current_apt > dtp:
+                dates_original.append(dtp)
+                dates.append(dtp.strftime('%A, %B %d @ %I:%M%p'))
+
+    if not dates:
+        return
+
+    config.set('DEFAULT', 'current_apt', dates_original[0].isoformat())
+    # if settings.get('no_spamming'):
+    #     return
+    # else:
+    with open('config.ini', 'w') as configfile:
+        config.write(configfile)
+
+    # except OSError:
+    #     logging.critical("Something went wrong when trying to obtain the openings")
+    #     return
+
+    msg = 'Found new appointment(s) in location %s on %s (current is on %s)!' % (
+        settings.get("enrollment_location_id"), dates[0], current_apt.strftime('%B %d, %Y @ %I:%M%p'))
     logging.info(msg + (' Sending email.' if not settings.get('no_email') else ' Not sending email.'))
 
-    if settings.get('notify_osx'):
-        notify_osx(msg)
-    if not settings.get('no_email'):
-        notify_send_email(dates, current_apt, settings, use_gmail=settings.get('use_gmail'))
-    if settings.get('twilio_account_sid'):
-        notify_sms(settings, dates)
+    # if settings.get('notify_osx'):
+    #     notify_osx(msg)
+    # if not settings.get('no_email'):
+    #     notify_send_email(dates, current_apt, settings, use_gmail=settings.get('use_gmail'))
+    # if settings.get('twilio_account_sid'):
+    #     notify_sms(settings, dates)
+    discord_helper.send_notification(msg, settings['discord_webhook'])
+
 
 def _check_settings(config):
     required_settings = (
@@ -160,11 +184,14 @@ def _check_settings(config):
         if not config.get(setting):
             raise ValueError('Missing setting %s in config.json file.' % setting)
 
-    if config.get('no_email') == False and not config.get('email_from'): # email_to is not required; will default to email_from if not set
-        raise ValueError('email_to and email_from required for sending email. (Run with --no-email or no_email=True to disable email.)')
+    if config.get('no_email') == False and not config.get(
+            'email_from'):  # email_to is not required; will default to email_from if not set
+        raise ValueError(
+            'email_to and email_from required for sending email. (Run with --no-email or no_email=True to disable email.)')
 
     if config.get('use_gmail') and not config.get('gmail_password'):
         raise ValueError('gmail_password not found in config but is required when running with use_gmail option')
+
 
 if __name__ == '__main__':
 
@@ -180,7 +207,8 @@ if __name__ == '__main__':
 
     # Parse Arguments
     parser = argparse.ArgumentParser(description="Command line script to check for goes openings.")
-    parser.add_argument('--config', dest='configfile', default='%s/config.json' % pwd, help='Config file to use (default is config.json)')
+    parser.add_argument('--config', dest='configfile', default='%s/config.json' % pwd,
+                        help='Config file to use (default is config.json)')
     arguments = vars(parser.parse_args())
     logging.info("config file is:" + arguments['configfile'])
     # Load Settings
@@ -207,5 +235,6 @@ if __name__ == '__main__':
         logging.getLogger('').addHandler(handler)
 
     logging.debug('Running cron with arguments: %s' % arguments)
-
-    main(settings)
+    while 1:
+        main(settings)
+        time.sleep(30)
