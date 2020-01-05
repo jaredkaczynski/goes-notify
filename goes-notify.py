@@ -3,9 +3,9 @@
 # Note: for setting up email with sendmail, see: http://linuxconfig.org/configuring-gmail-as-sendmail-email-relay
 
 import argparse
-import commands
 import json
 import logging
+import math
 import smtplib
 import sys
 import os
@@ -89,10 +89,6 @@ def notify_send_email(dates, current_apt, settings, use_gmail=False):
         log(e)
 
 
-def notify_osx(msg):
-    commands.getstatusoutput("osascript -e 'display notification \"%s\" with title \"Global Entry Notifier\"'" % msg)
-
-
 def notify_sms(settings, dates):
     for avail_apt in dates:
         try:
@@ -125,7 +121,7 @@ def main(settings):
         current_apt = datetime.strptime(config['DEFAULT']['current_apt'], "%Y-%m-%dT%H:%M:%S")
     except:
         current_apt = datetime.strptime('December 10, 2030', '%B %d, %Y')
-    #try:
+    # try:
     # obtain the json from the web url
     print(GOES_URL_FORMAT.format(settings['enrollment_location_id']))
     data = requests.get(GOES_URL_FORMAT.format(settings['enrollment_location_id'])).json()
@@ -143,7 +139,7 @@ def main(settings):
         if o['active']:
             dt = o['startTimestamp']  # 2017-12-22T15:15
             dtp = datetime.strptime(dt, '%Y-%m-%dT%H:%M')
-            if current_apt > dtp:
+            if (current_apt > dtp or current_apt < dtp) and abs((current_apt - dtp).total_seconds()) > 1440:
                 dates_original.append(dtp)
                 dates.append(dtp.strftime('%A, %B %d @ %I:%M%p'))
 
@@ -161,8 +157,9 @@ def main(settings):
     #     logging.critical("Something went wrong when trying to obtain the openings")
     #     return
 
-    msg = 'Found new appointment(s) in location %s on %s (current is on %s)!' % (
-        settings.get("enrollment_location_id"), dates[0], current_apt.strftime('%B %d, %Y @ %I:%M%p'))
+    msg = datetime.now().strftime(
+        "%H:%M:%S") + ' Best available appointment(s) in location %s on %s (current is on %s)!' % (
+              settings.get("enrollment_location_id"), dates[0], current_apt.strftime('%B %d, %Y @ %I:%M%p'))
     logging.info(msg + (' Sending email.' if not settings.get('no_email') else ' Not sending email.'))
 
     # if settings.get('notify_osx'):
@@ -176,21 +173,20 @@ def main(settings):
 
 def _check_settings(config):
     required_settings = (
-        'current_interview_date_str',
-        'enrollment_location_id'
+        'enrollment_location_id',
     )
 
     for setting in required_settings:
         if not config.get(setting):
             raise ValueError('Missing setting %s in config.json file.' % setting)
 
-    if config.get('no_email') == False and not config.get(
-            'email_from'):  # email_to is not required; will default to email_from if not set
-        raise ValueError(
-            'email_to and email_from required for sending email. (Run with --no-email or no_email=True to disable email.)')
+    # if config.get('no_email') == False and not config.get(
+    #         'email_from'):  # email_to is not required; will default to email_from if not set
+    #     raise ValueError(
+    #         'email_to and email_from required for sending email. (Run with --no-email or no_email=True to disable email.)')
 
-    if config.get('use_gmail') and not config.get('gmail_password'):
-        raise ValueError('gmail_password not found in config but is required when running with use_gmail option')
+    # if config.get('use_gmail') and not config.get('gmail_password'):
+    #     raise ValueError('gmail_password not found in config but is required when running with use_gmail option')
 
 
 if __name__ == '__main__':
@@ -217,7 +213,7 @@ if __name__ == '__main__':
             settings = json.load(json_file)
 
             # merge args into settings IF they're True
-            for key, val in arguments.iteritems():
+            for key, val in arguments.items():
                 if not arguments.get(key): continue
                 settings[key] = val
 
