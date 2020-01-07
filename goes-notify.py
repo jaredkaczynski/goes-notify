@@ -139,7 +139,7 @@ def main(settings):
         if o['active']:
             dt = o['startTimestamp']  # 2017-12-22T15:15
             dtp = datetime.strptime(dt, '%Y-%m-%dT%H:%M')
-            if (current_apt > dtp or current_apt < dtp) and abs((current_apt - dtp).total_seconds()) > 1440:
+            if (current_apt > dtp or current_apt < dtp) and abs((current_apt - dtp).total_seconds()) > 86400:
                 dates_original.append(dtp)
                 dates.append(dtp.strftime('%A, %B %d @ %I:%M%p'))
 
@@ -157,8 +157,7 @@ def main(settings):
     #     logging.critical("Something went wrong when trying to obtain the openings")
     #     return
 
-    msg = datetime.now().strftime(
-        "%H:%M:%S") + ' Best available appointment(s) in location %s on %s (current is on %s)!' % (
+    msg = datetime.now().isoformat() + ' Best available appointment(s) in location %s on %s (current is on %s)!' % (
               settings.get("enrollment_location_id"), dates[0], current_apt.strftime('%B %d, %Y @ %I:%M%p'))
     logging.info(msg + (' Sending email.' if not settings.get('no_email') else ' Not sending email.'))
 
